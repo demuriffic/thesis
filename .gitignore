@@ -1,0 +1,8 @@
+﻿combined_output/
+intermediate_output/
+benign/
+cryptojacking/
+gcb-assembly-pretrained/
+gcb-assembly-final/
+*.bin
+*.safetensors
