@@ -1,14 +1,15 @@
 // Ghidra post-analysis script (Java)
-// Exports per-function Control Flow Graphs (CFG) and Data Flow Graphs (DFG)
-// as JSON for GraphCodeBERT fine-tuning.
+// Exports per-function CFG and DFG for GraphCodeBERT fine-tuning.
 //
-// CFG: basic blocks as nodes, branch/fall-through edges between them.
-// DFG: register/memory def-use chains between instructions.
+// USAGE:
+// analyzeHeadless.bat [project] [project_name] -import [binary] \
+//   -postScript "ExportGraphs.java" "[output_path.json]" \
+//   -deleteProject
 //
-// Called by analyzeHeadless with:
-//   -postScript ExportGraphs.java <output_json_path>
-//
-// @category Thesis
+// EXAMPLE:
+// analyzeHeadless.bat C:/ghidra/projects MyProject -import malware.exe \
+//   -postScript "ExportGraphs.java" "output/graphs.json" \
+//   -deleteProject
 
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.listing.*;
@@ -16,16 +17,63 @@ import ghidra.program.model.block.*;
 import ghidra.program.model.address.*;
 import ghidra.program.model.pcode.*;
 import ghidra.program.model.lang.Register;
+
 import java.io.*;
 import java.util.*;
 
 public class ExportGraphs extends GhidraScript {
 
+    // =========================
+    // NORMALIZATION
+    // =========================
+    private String normalizeRegister(Register reg) {
+        if (reg == null) return "REG";
+
+        String name = reg.getName().toLowerCase();
+
+        if (name.equals("rsp") || name.equals("esp")) return "SP";
+        if (name.equals("rbp") || name.equals("ebp")) return "BP";
+
+        int size = reg.getBitLength();
+
+        if (size == 64) return "REG64_" + reg.getName();
+        if (size == 32) return "REG32_" + reg.getName();
+        if (size == 16) return "REG16_" + reg.getName();
+        if (size == 8) return "REG8_" + reg.getName();
+
+        return "REG_" + reg.getName();
+    }
+
+    private String normalizeVarnode(Varnode v) {
+        if (v == null) return "UNK";
+
+        if (v.isRegister()) {
+            Register reg = currentProgram.getRegister(v.getAddress(), v.getSize());
+            if (reg != null) {
+                return normalizeRegister(reg);
+            }
+            return "REG";
+        }
+
+        if (v.isUnique()) {
+            return "TMP_" + v.getOffset(); // preserve identity
+        }
+
+        if (v.isConstant()) return "IMM";
+        if (v.isAddress()) return "MEM";
+
+        return "UNK";
+    }
+
+    // =========================
+    // MAIN
+    // =========================
     @Override
     public void run() throws Exception {
+
         String[] args = getScriptArgs();
         if (args.length < 1) {
-            println("ERROR: No output path provided as script argument.");
+            println("ERROR: No output path provided.");
             return;
         }
 
@@ -43,25 +91,25 @@ public class ExportGraphs extends GhidraScript {
         BasicBlockModel bbModel = new BasicBlockModel(program);
 
         PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(outFile)));
+
         try {
             writer.println("[");
-            int funcCount = 0;
             boolean firstFunc = true;
 
             FunctionIterator functions = fm.getFunctions(true);
+
             while (functions.hasNext()) {
-                if (monitor.isCancelled()) {
-                    break;
-                }
+
+                if (monitor.isCancelled()) break;
 
                 Function func = functions.next();
                 AddressSetView body = func.getBody();
 
-                // Skip thunks and tiny functions
-                InstructionIterator testIter = listing.getInstructions(body, true);
+                // skip tiny functions
+                InstructionIterator countIter = listing.getInstructions(body, true);
                 int instrTotal = 0;
-                while (testIter.hasNext()) {
-                    testIter.next();
+                while (countIter.hasNext()) {
+                    countIter.next();
                     instrTotal++;
                 }
                 if (instrTotal < 3) continue;
@@ -74,59 +122,74 @@ public class ExportGraphs extends GhidraScript {
                 writer.println("    \"entry\": \"0x" + func.getEntryPoint() + "\",");
                 writer.println("    \"instruction_count\": " + instrTotal + ",");
 
-                // === Collect instructions with index mapping ===
+                // =========================
+                // INSTRUCTIONS
+                // =========================
                 List<Address> instrAddrs = new ArrayList<>();
                 Map<String, Integer> addrToIdx = new HashMap<>();
-                InstructionIterator allInstr = listing.getInstructions(body, true);
-                while (allInstr.hasNext()) {
-                    Instruction instr = allInstr.next();
+
+                InstructionIterator instrIter1 = listing.getInstructions(body, true);
+                while (instrIter1.hasNext()) {
+                    Instruction instr = instrIter1.next();
                     String addrStr = "0x" + instr.getAddress().toString();
                     addrToIdx.put(addrStr, instrAddrs.size());
                     instrAddrs.add(instr.getAddress());
                 }
 
-                // === Instructions list ===
                 writer.println("    \"instructions\": [");
-                InstructionIterator instrIter = listing.getInstructions(body, true);
+
+                InstructionIterator instrIter2 = listing.getInstructions(body, true);
                 boolean firstInstr = true;
-                while (instrIter.hasNext()) {
-                    Instruction instr = instrIter.next();
+
+                while (instrIter2.hasNext()) {
+                    Instruction instr = instrIter2.next();
+
                     if (!firstInstr) writer.println(",");
                     firstInstr = false;
 
                     String mnemonic = instr.getMnemonicString();
                     int numOps = instr.getNumOperands();
+
                     StringBuilder ops = new StringBuilder();
                     for (int i = 0; i < numOps; i++) {
                         if (i > 0) ops.append(", ");
                         ops.append(instr.getDefaultOperandRepresentation(i));
                     }
+
                     writer.print("      {\"addr\": \"0x" + instr.getAddress()
                             + "\", \"mnemonic\": \"" + escapeJson(mnemonic)
                             + "\", \"operands\": \"" + escapeJson(ops.toString())
-                            + "\", \"idx\": " + addrToIdx.get("0x" + instr.getAddress().toString()) + "}");
+                            + "\", \"idx\": " + addrToIdx.get("0x" + instr.getAddress().toString())
+                            + "}");
                 }
+
                 writer.println();
                 writer.println("    ],");
 
-                // === CFG: Basic blocks and edges ===
+                // =========================
+                // CFG NODES
+                // =========================
                 writer.println("    \"cfg_nodes\": [");
+
                 List<CodeBlock> blocks = new ArrayList<>();
                 CodeBlockIterator blockIter = bbModel.getCodeBlocksContaining(body, monitor);
+
                 while (blockIter.hasNext()) {
                     blocks.add(blockIter.next());
                 }
 
                 boolean firstBlock = true;
+
                 for (CodeBlock block : blocks) {
+
                     if (!firstBlock) writer.println(",");
                     firstBlock = false;
 
                     Address start = block.getFirstStartAddress();
                     Address end = block.getMaxAddress();
 
-                    // Collect instruction indices in this block
                     List<Integer> blockInstrIdxs = new ArrayList<>();
+
                     for (int i = 0; i < instrAddrs.size(); i++) {
                         Address a = instrAddrs.get(i);
                         if (a.compareTo(start) >= 0 && a.compareTo(end) <= 0) {
@@ -138,90 +201,120 @@ public class ExportGraphs extends GhidraScript {
                             + "\", \"end\": \"0x" + end
                             + "\", \"instr_indices\": " + blockInstrIdxs + "}");
                 }
+
                 writer.println();
                 writer.println("    ],");
 
-                // === CFG edges ===
+                // =========================
+                // CFG EDGES
+                // =========================
                 writer.println("    \"cfg_edges\": [");
+
                 boolean firstEdge = true;
+
                 for (CodeBlock block : blocks) {
+
                     CodeBlockReferenceIterator destIter = block.getDestinations(monitor);
+
                     String srcAddr = "0x" + block.getFirstStartAddress().toString();
+
                     while (destIter.hasNext()) {
+
                         CodeBlockReference ref = destIter.next();
                         Address destAddr = ref.getDestinationAddress();
-                        // Only include edges within this function
+
                         if (body.contains(destAddr)) {
+
                             if (!firstEdge) writer.println(",");
                             firstEdge = false;
+
                             writer.print("      {\"from\": \"" + srcAddr
                                     + "\", \"to\": \"0x" + destAddr
                                     + "\", \"type\": \"" + ref.getFlowType().getName() + "\"}");
                         }
                     }
                 }
+
                 writer.println();
                 writer.println("    ],");
 
-                // === DFG: Register def-use chains ===
+                // =========================
+                // DFG (P-CODE)
+                // =========================
                 writer.println("    \"dfg_edges\": [");
-                // Track where each register was last defined (addr -> instruction index)
+
                 Map<String, Integer> lastDef = new HashMap<>();
+                Set<String> seenEdges = new HashSet<>();
                 boolean firstDfg = true;
 
                 InstructionIterator dfgIter = listing.getInstructions(body, true);
+
                 while (dfgIter.hasNext()) {
+
                     Instruction instr = dfgIter.next();
+
                     String addrStr = "0x" + instr.getAddress().toString();
                     Integer curIdx = addrToIdx.get(addrStr);
                     if (curIdx == null) continue;
 
-                    // Get objects read (uses) by this instruction
-                    Object[] inputObjs = instr.getInputObjects();
-                    if (inputObjs != null) {
-                        Set<String> seenRegs = new HashSet<>();
-                        for (Object obj : inputObjs) {
-                            if (obj instanceof Register) {
-                                String regName = ((Register) obj).getName();
-                                if (seenRegs.contains(regName)) continue;
-                                seenRegs.add(regName);
-                                Integer defIdx = lastDef.get(regName);
-                                if (defIdx != null && !defIdx.equals(curIdx)) {
+                    PcodeOp[] ops = instr.getPcode();
+                    if (ops == null) continue;
+
+                    for (PcodeOp op : ops) {
+
+                        // USES
+                        for (int i = 0; i < op.getNumInputs(); i++) {
+
+                            Varnode in = op.getInput(i);
+                            String varName = normalizeVarnode(in);
+
+                            Integer defIdx = lastDef.get(varName);
+
+                            if (defIdx != null && !defIdx.equals(curIdx)) {
+
+                                String edgeKey = defIdx + "-" + curIdx + "-" + varName;
+
+                                if (seenEdges.add(edgeKey)) {
+
                                     if (!firstDfg) writer.println(",");
                                     firstDfg = false;
-                                    writer.print("      {\"from\": " + defIdx
-                                            + ", \"to\": " + curIdx
-                                            + ", \"var\": \"" + escapeJson(regName) + "\"}");
+
+                                    writer.print("      {\"from\": " + defIdx +
+                                            ", \"to\": " + curIdx +
+                                            ", \"var\": \"" + escapeJson(varName) + "\"}");
                                 }
                             }
                         }
-                    }
 
-                    // Get objects written (defs) by this instruction
-                    Object[] outputObjs = instr.getResultObjects();
-                    if (outputObjs != null) {
-                        for (Object obj : outputObjs) {
-                            if (obj instanceof Register) {
-                                String regName = ((Register) obj).getName();
-                                lastDef.put(regName, curIdx);
-                            }
+                        // DEF
+                        Varnode out = op.getOutput();
+                        if (out != null) {
+                            String varName = normalizeVarnode(out);
+                            lastDef.put(varName, curIdx);
                         }
                     }
                 }
+
                 writer.println();
                 writer.println("    ]");
+
                 writer.println("  }");
-                funcCount++;
             }
 
             writer.println("]");
-            println("Exported graphs for " + funcCount + " functions -> " + outputPath);
+
+            println("Exported graphs -> " + outputPath);
+
         } finally {
             writer.close();
         }
     }
 
+    // =========================
+    // JSON ESCAPE
+    // =========================
     private String escapeJson(String s) {
+        if (s == null) return "";
         return s.replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")

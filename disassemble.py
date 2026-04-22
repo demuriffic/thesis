@@ -59,10 +59,10 @@ def ensure_parent_dir(path):
         os.makedirs(parent, exist_ok=True)
 
 
-GHIDRA_PATH = r"C:\Thesis\ghidra\support\analyzeHeadless.bat"
-PROJECT_DIR = r"C:\Thesis\ghidra\projects\MalwareProject"
-PROJECT_NAME = "MalwareProject"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+GHIDRA_PATH = os.path.join(SCRIPT_DIR, "ghidra", "support", "analyzeHeadless.bat")
+PROJECT_DIR = os.path.join(SCRIPT_DIR, "ghidra_projects", "MalwareProject")
+PROJECT_NAME = "MalwareProject"
 SCRIPTS_DIR = os.path.join(SCRIPT_DIR, "ghidra_scripts")
 
 INPUT_ROOTS = [
@@ -72,9 +72,27 @@ INPUT_ROOTS = [
 
 OUTPUT_ROOT = os.path.join(SCRIPT_DIR, "combined_output")
 INTERMEDIATE_ROOT = os.path.join(SCRIPT_DIR, "intermediate_output")
-KEEP_INTERMEDIATE = False
+KEEP_INTERMEDIATE = True  # Changed to True to debug
 
 os.makedirs(PROJECT_DIR, exist_ok=True)
+
+# Verify paths exist
+if not os.path.exists(GHIDRA_PATH):
+    print(f"FATAL ERROR: Ghidra not found at: {GHIDRA_PATH}")
+    print(f"Please check that {SCRIPT_DIR}\\ghidra\\support\\analyzeHeadless.bat exists")
+    exit(1)
+
+if not os.path.exists(SCRIPTS_DIR):
+    print(f"FATAL ERROR: Scripts directory not found at: {SCRIPTS_DIR}")
+    print(f"Please check that {SCRIPT_DIR}\\ghidra_scripts exists")
+    exit(1)
+
+print(f"[INFO] Using Ghidra: {GHIDRA_PATH}")
+print(f"[INFO] Using scripts: {SCRIPTS_DIR}")
+print(f"[INFO] Project dir: {PROJECT_DIR}")
+print(f"[INFO] Input folders: {', '.join(INPUT_ROOTS)}")
+print(f"[INFO] Output folder: {OUTPUT_ROOT}")
+print()
 
 total = 0
 failed = 0
@@ -126,8 +144,22 @@ for raw_folder in INPUT_ROOTS:
                 "-analysisTimeoutPerFile", "3600",
             ]
 
+            print(f"  [DEBUG] Command: {' '.join(cmd[:6])}...")
+            print(f"  [DEBUG] Scripts path: {SCRIPTS_DIR}")
+            print(f"  [DEBUG] Output paths: {asm_path[:40]}... {graph_path[:40]}...")
+
             try:
                 result = subprocess.run(cmd, timeout=3600, capture_output=True, text=True)
+
+                # Check return code
+                if result.returncode != 0:
+                    print(f"    [GHIDRA] Return code: {result.returncode}")
+
+                # ALWAYS show output (for debugging)
+                if result.stdout:
+                    print(f"    [GHIDRA OUTPUT]")
+                    for line in result.stdout.splitlines()[-30:]:  # Last 30 lines
+                        print(f"      {line}")
 
                 # Dump relevant Ghidra output for diagnostics
                 for line in (result.stdout or "").splitlines():
@@ -135,11 +167,15 @@ for raw_folder in INPUT_ROOTS:
                         print(f"    [GHIDRA] {line.strip()}")
 
                 if result.stderr:
-                    for line in result.stderr.strip().splitlines()[-5:]:
-                        print(f"    [STDERR] {line.strip()}")
+                    print(f"    [STDERR OUTPUT]")
+                    for line in result.stderr.strip().splitlines():
+                        print(f"      {line.strip()}")
 
                 asm_ok = os.path.exists(asm_path)
                 graph_ok = os.path.exists(graph_path)
+                
+                print(f"    [DEBUG] Files created: asm={asm_ok}, graph={graph_ok}")
+                
                 if asm_ok and graph_ok:
                     try:
                         with open(asm_path, "r", encoding="utf-8", errors="replace") as asm_file:
@@ -183,6 +219,7 @@ for raw_folder in INPUT_ROOTS:
                 failed += 1
             except Exception as e:
                 print(f"  [FAIL] Error: {e}")
+                print(f"    Command was: {' '.join(cmd[:3])}...")  # Show first part of command
                 failed += 1
 
 print(f"\nDone — {total} combined succeeded, {failed} failed, {skipped} skipped")
