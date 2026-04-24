@@ -76,7 +76,7 @@ INPUT_ROOTS = [
     os.path.join(SCRIPT_DIR, "cryptojacking"),
 ]
 
-OUTPUT_ROOT = os.path.join(SCRIPT_DIR, "combined_output")
+OUTPUT_ROOT = os.path.join(SCRIPT_DIR, "testing_output")
 INTERMEDIATE_ROOT = os.path.join(SCRIPT_DIR, "intermediate_output")
 KEEP_INTERMEDIATE = False
 
@@ -103,11 +103,17 @@ for raw_folder in INPUT_ROOTS:
             rel_path = os.path.relpath(binary_path, raw_folder)
             combined_path = os.path.abspath(os.path.join(OUTPUT_ROOT, rel_path + ".json"))
             filtered_path = os.path.abspath(os.path.join(SCRIPT_DIR, "filtered_output", os.path.basename(combined_path)))
+            training_path = os.path.abspath(os.path.join(SCRIPT_DIR, "combined_output", os.path.basename(combined_path)))
             asm_path = os.path.abspath(os.path.join(INTERMEDIATE_ROOT, "asm", rel_path + ".asm"))
             graph_path = os.path.abspath(os.path.join(INTERMEDIATE_ROOT, "graph", rel_path + ".json"))
 
             if os.path.exists(combined_path):
                 print(f"  [SKIP] Combined exists: {binary[:16]}...")
+                skipped += 1
+                continue
+
+            if os.path.exists(training_path):
+                print(f"  [SKIP] Already processed in training set: {binary[:16]}...")
                 skipped += 1
                 continue
 

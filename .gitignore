@@ -1,8 +1,14 @@
 ﻿combined_output/
 intermediate_output/
 benign/
+testing_output/
+filtered_output/
 cryptojacking/
 gcb-assembly-pretrained/
 gcb-assembly-final/
+ghidra/
+gcb-stage2-classification/
+gcb-stage2-final/
 *.bin
 *.safetensors
+upx.exe
