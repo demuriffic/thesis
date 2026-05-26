@@ -12,5 +12,6 @@ gcb-stage2-final/
 *.bin
 *.safetensors
 upx.exe
-.venx
+.venv/
 .jsonl
+labeled_heuristic.jsonl
