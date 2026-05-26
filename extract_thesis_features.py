@@ -75,18 +75,7 @@ def graph_density(graphs) -> float:
         edges = 0
         if isinstance(g.get("cfg_edges"), list):
             edges += len(g["cfg_edges"])
-        if isinstance(g.get("dfg_edges"), list):
-            edges += len(g["dfg_edges"])
-        if isinstance(g.get("edges"), list):
-            edges += len(g["edges"])
-
-        edge_index = g.get("edge_index")
-        if (
-            isinstance(edge_index, list)
-            and len(edge_index) == 2
-            and all(isinstance(x, list) for x in edge_index)
-        ):
-            edges += len(edge_index[0])
+        # CFG-only to avoid mixing in DFG edges from older samples.
 
         if nodes:
             densities.append(edges / nodes)
