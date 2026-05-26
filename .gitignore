@@ -12,3 +12,5 @@ gcb-stage2-final/
 *.bin
 *.safetensors
 upx.exe
+.venx
+.jsonl
